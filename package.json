@@ -8,8 +8,9 @@
     "agent-browser": "./bin/agent-browser"
   },
   "scripts": {
-    "build": "tsc && bun build ./src/cli-light.ts --compile --outfile ./bin/agent-browser",
-    "build:node": "tsc",
+    "build": "tsc && cargo build --release --manifest-path cli/Cargo.toml && cp cli/target/release/agent-browser bin/agent-browser",
+    "build:ts": "tsc",
+    "build:rust": "cargo build --release --manifest-path cli/Cargo.toml && cp cli/target/release/agent-browser bin/agent-browser",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
