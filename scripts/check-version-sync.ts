@@ -1,23 +1,20 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 /**
  * Verifies that package.json and cli/Cargo.toml have the same version.
  * Used in CI to catch version drift.
  */
 
-import { readFileSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'node:path';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const rootDir = join(__dirname, '..');
+const rootDir = join(import.meta.dir, '..');
 
 // Read package.json version
-const packageJson = JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf-8'));
+const packageJson = await Bun.file(join(rootDir, 'package.json')).json();
 const packageVersion = packageJson.version;
 
 // Read Cargo.toml version
-const cargoToml = readFileSync(join(rootDir, 'cli/Cargo.toml'), 'utf-8');
+const cargoToml = await Bun.file(join(rootDir, 'cli/Cargo.toml')).text();
 const cargoVersionMatch = cargoToml.match(/^version\s*=\s*"([^"]*)"/m);
 
 if (!cargoVersionMatch) {
@@ -32,7 +29,7 @@ if (packageVersion !== cargoVersion) {
   console.error(`  package.json:    ${packageVersion}`);
   console.error(`  cli/Cargo.toml:  ${cargoVersion}`);
   console.error('');
-  console.error("Run 'pnpm run version:sync' to fix this.");
+  console.error("Run 'bun version:sync' to fix this.");
   process.exit(1);
 }
 
