@@ -1,0 +1,7 @@
+pre-commit:
+  parallel: true
+  jobs:
+    - run: bun lint {staged_files}
+      glob: "*.{js,ts,jsx,tsx}"
+    - run: bun format {all_files}
+      glob: "src/**/*.{js,ts,jsx,tsx}"
