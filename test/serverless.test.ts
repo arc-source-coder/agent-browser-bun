@@ -5,7 +5,7 @@
  * Note: @sparticuz/chromium only works on Linux (designed for AWS Lambda).
  * This test will skip on non-Linux platforms.
  */
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll } from 'bun:test';
 import { BrowserManager } from '../src/browser.js';
 import * as os from 'os';
 

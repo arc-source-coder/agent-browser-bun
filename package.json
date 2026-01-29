@@ -30,12 +30,12 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write 'src/**/*.ts'",
     "format:check": "prettier --check 'src/**/*.ts'",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
     "postinstall": "node scripts/postinstall.js",
     "changeset": "changeset",
-    "ci:version": "changeset version && pnpm run version:sync && pnpm install --no-frozen-lockfile",
-    "ci:publish": "pnpm run version:sync && pnpm run build && changeset publish"
+    "ci:version": "changeset version && bun version:sync && bun install --no-frozen-lockfile",
+    "ci:publish": "bun version:sync && bun run build && changeset publish"
   },
   "keywords": [
     "browser",
@@ -68,8 +68,7 @@
     "playwright": "^1.57.0",
     "prettier": "^3.7.4",
     "tsx": "^4.6.0",
-    "typescript": "^5.3.0",
-    "vitest": "^4.0.16"
+    "typescript": "^5.3.0"
   },
   "lint-staged": {
     "src/**/*.ts": "prettier --write"
