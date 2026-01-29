@@ -7,8 +7,6 @@ Instructions for AI coding agents working with this codebase.
 - Do not use emojis in code, output, or documentation. Unicode symbols (✓, ✗, →, ⚠) are acceptable.
 - CLI colored output uses `cli/src/color.rs`. This module respects the `NO_COLOR` environment variable. Never use hardcoded ANSI color codes.
 
-<!-- opensrc:start -->
-
 ## Source Code Reference
 
 Source code for dependencies is available in `opensrc/` for deeper understanding of implementation details.
@@ -22,10 +20,8 @@ Use this source code when you need to understand how a package works internally,
 To fetch source code for a package or repository you need to understand, run:
 
 ```bash
-npx opensrc <package>           # npm package (e.g., npx opensrc zod)
-npx opensrc pypi:<package>      # Python package (e.g., npx opensrc pypi:requests)
-npx opensrc crates:<package>    # Rust crate (e.g., npx opensrc crates:serde)
-npx opensrc <owner>/<repo>      # GitHub repo (e.g., npx opensrc vercel/ai)
+opensrc <package>           # npm package (e.g., opensrc fetch npm:zod)
+opensrc pypi:<package>      # Python package (e.g., opensrc fetch pypi:requests)
+opensrc crates:<package>    # Rust crate (e.g., opensrc fetch crates:serde)
+opensrc <owner>/<repo>      # GitHub repo (e.g., opensrc fetch gh:vercel/ai)
 ```
-
-<!-- opensrc:end -->

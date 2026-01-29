@@ -136,7 +136,7 @@ pub fn run_install(with_deps: bool) {
                 color::warning_indicator()
             );
             println!("  agent-browser install --with-deps");
-            println!("  or: npx playwright install-deps chromium");
+            println!("  or: bunx --bun playwright install-deps chromium");
             println!();
         }
     }
@@ -148,12 +148,12 @@ pub fn run_install(with_deps: bool) {
     // Pass the entire command as a single string to /c to handle paths with spaces.
     #[cfg(windows)]
     let status = Command::new("cmd")
-        .args(["/c", "npx playwright install chromium"])
+        .args(["/c", "bunx --bun playwright install chromium"])
         .status();
 
     #[cfg(not(windows))]
-    let status = Command::new("npx")
-        .args(["playwright", "install", "chromium"])
+    let status = Command::new("bun")
+        .args(["x", "--bun", "playwright", "install", "chromium"])
         .status();
 
     match status {
@@ -183,8 +183,8 @@ pub fn run_install(with_deps: bool) {
             exit(1);
         }
         Err(e) => {
-            eprintln!("{} Failed to run npx: {}", color::error_indicator(), e);
-            eprintln!("Make sure Node.js is installed and npx is in your PATH");
+            eprintln!("{} Failed to run bunx: {}", color::error_indicator(), e);
+            eprintln!("Make sure Bun is installed and in your PATH");
             exit(1);
         }
     }
