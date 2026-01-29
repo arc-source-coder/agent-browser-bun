@@ -2,7 +2,7 @@
 
 /**
  * Cross-platform CLI wrapper for agent-browser
- * 
+ *
  * This wrapper enables npx support on Windows where shell scripts don't work.
  * For global installs, postinstall.js patches the shims to invoke the native
  * binary directly (zero overhead).
@@ -68,7 +68,7 @@ function main() {
     console.error(`Error: No binary found for ${platform()}-${arch()}`);
     console.error(`Expected: ${binaryPath}`);
     console.error('');
-    console.error('Run "npm run build:native" to build for your platform,');
+    console.error('Run "bun build:native" to build for your platform,');
     console.error('or reinstall the package to trigger the postinstall download.');
     process.exit(1);
   }
