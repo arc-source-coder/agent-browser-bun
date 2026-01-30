@@ -55,7 +55,7 @@
   },
   "homepage": "https://github.com/vercel-labs/agent-browser#readme",
   "dependencies": {
-    "playwright-core": "^1.57.0",
+    "playwright-core": "^1.58.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -67,6 +67,9 @@
     "lefthook": "^2.0.16",
     "oxfmt": "^0.27.0",
     "oxlint": "^1.42.0",
-    "playwright": "^1.57.0"
+    "playwright": "^1.58.0"
+  },
+  "patchedDependencies": {
+    "playwright-core@1.58.0": "patches/playwright-core@1.58.0.patch"
   }
 }
