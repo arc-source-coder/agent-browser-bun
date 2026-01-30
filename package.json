@@ -56,7 +56,6 @@
   "homepage": "https://github.com/vercel-labs/agent-browser#readme",
   "dependencies": {
     "playwright-core": "^1.57.0",
-    "ws": "^8.19.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
