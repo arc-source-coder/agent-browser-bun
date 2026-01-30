@@ -3,7 +3,7 @@
   "version": "0.8.4",
   "description": "Headless browser automation CLI for AI agents",
   "type": "module",
-  "main": "dist/daemon.js",
+  "main": "src/daemon.ts",
   "files": [
     "dist",
     "bin",
@@ -11,28 +11,28 @@
     "skills"
   ],
   "bin": {
-    "agent-browser": "./bin/agent-browser.js"
+    "agent-browser": "./bin/agent-browser.ts"
   },
   "scripts": {
-    "version:sync": "bun scripts/sync-version.js",
+    "version:sync": "bun scripts/sync-version.ts",
     "version": "bun version:sync && git add cli/Cargo.toml",
     "build": "bun build src/daemon.ts --outdir ./dist --target bun",
-    "build:native": "bun version:sync && cargo build --release --manifest-path cli/Cargo.toml && bun scripts/copy-native.js",
+    "build:native": "bun version:sync && cargo build --release --manifest-path cli/Cargo.toml && bun scripts/copy-native.ts",
     "build:linux": "bun version:sync && podman compose -f docker/docker-compose.yml run --rm build-linux",
     "build:macos": "bun version:sync && (cargo build --release --manifest-path cli/Cargo.toml --target aarch64-apple-darwin & cargo build --release --manifest-path cli/Cargo.toml --target x86_64-apple-darwin & wait) && cp cli/target/aarch64-apple-darwin/release/agent-browser bin/agent-browser-darwin-arm64 && cp cli/target/x86_64-apple-darwin/release/agent-browser bin/agent-browser-darwin-x64",
     "build:windows": "bun version:sync && podman compose -f docker/docker-compose.yml run --rm build-windows",
     "build:all-platforms": "bun version:sync && (bun build:linux & bun build:windows & wait) && bun build:macos",
     "build:docker": "podman build -t agent-browser-builder -f docker/Dockerfile.build .",
     "release": "bun version:sync && bun build && bun build:all-platforms && bun publish",
-    "start": "node dist/daemon.js",
-    "dev": "tsx src/daemon.ts",
+    "start": "bun src/daemon.ts",
+    "dev": "bun src/daemon.ts",
     "typecheck": "tsgo --noEmit",
     "lint": "oxlint",
     "format": "oxfmt --write src/ test/",
     "format:check": "oxfmt --check src/",
     "test": "bun test",
     "test:watch": "bun test --watch",
-    "postinstall": "node scripts/postinstall.js",
+    "postinstall": "bun scripts/postinstall.ts",
     "changeset": "changeset",
     "ci:version": "changeset version && bun version:sync && bun install --no-frozen-lockfile",
     "ci:publish": "bun version:sync && bun run build && changeset publish"
@@ -68,7 +68,6 @@
     "lefthook": "^2.0.16",
     "oxfmt": "^0.27.0",
     "oxlint": "^1.42.0",
-    "playwright": "^1.57.0",
-    "tsx": "^4.6.0"
+    "playwright": "^1.57.0"
   }
 }
