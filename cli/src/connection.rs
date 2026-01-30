@@ -122,14 +122,15 @@ fn get_port_path(session: &str) -> PathBuf {
 }
 
 #[cfg(windows)]
-fn get_port_for_session(session: &str) -> u16 {
-    let mut hash: i32 = 0;
-    for c in session.chars() {
-        hash = ((hash << 5).wrapping_sub(hash)).wrapping_add(c as i32);
-    }
-    // Correct logic: first take absolute modulo, then cast to u16
-    // Using unsigned_abs() to safely handle i32::MIN
-    49152 + ((hash.unsigned_abs() as u32 % 16383) as u16)
+fn get_port_for_session(session: &str) -> Result<u16, String> {
+    let port_file = get_port_path(session);
+    let port_str =
+        fs::read_to_string(&port_file).map_err(|e| format!("Failed to read port file: {}", e))?;
+
+    Ok(port_str
+        .trim()
+        .parse()
+        .map_err(|e| format!("Invalid port in file: {}", e))?)
 }
 
 #[cfg(unix)]
@@ -154,12 +155,10 @@ fn is_daemon_running(session: &str) -> bool {
     if !pid_path.exists() {
         return false;
     }
-    let port = get_port_for_session(session);
-    TcpStream::connect_timeout(
-        &format!("127.0.0.1:{}", port).parse().unwrap(),
-        Duration::from_millis(100),
-    )
-    .is_ok()
+    match get_port_for_session(session) {
+        Ok(_) => daemon_ready(session),
+        Err(_) => false,
+    }
 }
 
 fn daemon_ready(session: &str) -> bool {
@@ -170,12 +169,14 @@ fn daemon_ready(session: &str) -> bool {
     }
     #[cfg(windows)]
     {
-        let port = get_port_for_session(session);
-        TcpStream::connect_timeout(
-            &format!("127.0.0.1:{}", port).parse().unwrap(),
-            Duration::from_millis(50),
-        )
-        .is_ok()
+        match get_port_for_session(session) {
+            Ok(port) => TcpStream::connect_timeout(
+                &format!("127.0.0.1:{}", port).parse().unwrap(),
+                Duration::from_millis(50),
+            )
+            .is_ok(),
+            Err(_) => false,
+        }
     }
 }
 
@@ -217,16 +218,16 @@ pub fn ensure_daemon(
     let exe_dir = exe_path.parent().unwrap();
 
     let mut daemon_paths = vec![
-        exe_dir.join("daemon.js"),
-        exe_dir.join("../dist/daemon.js"),
-        PathBuf::from("dist/daemon.js"),
+        exe_dir.join("daemon.ts"),
+        exe_dir.join("../src/daemon.ts"),
+        PathBuf::from("src/daemon.ts"),
     ];
 
     // Check AGENT_BROWSER_HOME environment variable
     if let Ok(home) = env::var("AGENT_BROWSER_HOME") {
         let home_path = PathBuf::from(&home);
-        daemon_paths.insert(0, home_path.join("dist/daemon.js"));
-        daemon_paths.insert(1, home_path.join("daemon.js"));
+        daemon_paths.insert(0, home_path.join("src/daemon.ts"));
+        daemon_paths.insert(1, home_path.join("daemon.ts"));
     }
 
     let daemon_path = daemon_paths
@@ -239,7 +240,7 @@ pub fn ensure_daemon(
     {
         use std::os::unix::process::CommandExt;
 
-        let mut cmd = Command::new("node");
+        let mut cmd = Command::new("bun");
         cmd.arg(daemon_path)
             .env("AGENT_BROWSER_DAEMON", "1")
             .env("AGENT_BROWSER_SESSION", session);
@@ -304,9 +305,7 @@ pub fn ensure_daemon(
     {
         use std::os::windows::process::CommandExt;
 
-        // On Windows, call node directly. Command::new handles PATH resolution (node.exe or node.cmd)
-        // and automatically quotes arguments containing spaces.
-        let mut cmd = Command::new("node");
+        let mut cmd = Command::new("bun");
         cmd.arg(daemon_path)
             .env("AGENT_BROWSER_DAEMON", "1")
             .env("AGENT_BROWSER_SESSION", session);
@@ -385,7 +384,7 @@ fn connect(session: &str) -> Result<Connection, String> {
     }
     #[cfg(windows)]
     {
-        let port = get_port_for_session(session);
+        let port = get_port_for_session(session)?;
         TcpStream::connect(format!("127.0.0.1:{}", port))
             .map(Connection::Tcp)
             .map_err(|e| format!("Failed to connect: {}", e))
