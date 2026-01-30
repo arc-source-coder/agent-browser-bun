@@ -1,4 +1,4 @@
-import { WebSocketServer, WebSocket } from 'ws';
+import type { Server, ServerWebSocket } from 'bun';
 import type { BrowserManager, ScreencastFrame } from './browser.js';
 import { setScreencastFrameCallback } from './actions.js';
 
@@ -70,11 +70,11 @@ export type StreamMessage =
  * WebSocket server for streaming browser viewport and receiving input
  */
 export class StreamServer {
-  private wss: WebSocketServer | null = null;
-  private clients: Set<WebSocket> = new Set();
+  private server: Server<any> | null = null;
   private browser: BrowserManager;
   private port: number;
   private isScreencasting: boolean = false;
+  private clientCount: number = 0;
 
   constructor(browser: BrowserManager, port: number = 9223) {
     this.browser = browser;
@@ -84,52 +84,52 @@ export class StreamServer {
   /**
    * Start the WebSocket server
    */
-  start(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      try {
-        this.wss = new WebSocketServer({
-          port: this.port,
+  async start(): Promise<void> {
+    try {
+      this.server = Bun.serve({
+        port: this.port,
+        fetch: (req, server) => {
           // Security: Reject cross-origin WebSocket connections from browsers.
           // This prevents malicious web pages from connecting and injecting input events.
-          verifyClient: (info: {
-            origin: string;
-            secure: boolean;
-            req: import('http').IncomingMessage;
-          }) => {
-            const origin = info.origin;
-            // Allow connections with no origin (non-browser clients like CLI tools)
-            // Reject connections from web pages (which always have an origin)
-            if (origin && !origin.startsWith('file://')) {
-              console.log(`[StreamServer] Rejected connection from origin: ${origin}`);
-              return false;
-            }
-            return true;
+          const origin = req.headers.get('origin');
+
+          // Allow connections with no origin (non-browser clients like CLI tools)
+          // Reject connections from web pages (which always have an origin)
+          if (origin && !origin.startsWith('file://')) {
+            console.log(`[StreamServer] Rejected connection from origin: ${origin}`);
+            return new Response('Forbidden', { status: 403 });
+          }
+
+          if (server.upgrade(req)) return;
+          return new Response('Upgrade failed', { status: 400 });
+        },
+        websocket: {
+          open: (ws: ServerWebSocket) => {
+            this.handleOpen(ws);
           },
-        });
+          message: (ws: ServerWebSocket, data) => {
+            this.handleMessage(ws, data);
+          },
+          close: (ws: ServerWebSocket, code, reason) => {
+            if (code !== 1000) {
+              let r = reason ? `due to ${reason}` : '';
+              console.log(`[StreamServer] WebSocket exited with code ${code}${r}`);
+            }
 
-        this.wss.on('connection', (ws) => {
-          this.handleConnection(ws);
-        });
+            this.handleClose(ws);
+          },
+        },
+      });
+      console.log(`[StreamServer] Listening on port ${this.port}`);
 
-        this.wss.on('error', (error) => {
-          console.error('[StreamServer] WebSocket error:', error);
-          reject(error);
-        });
-
-        this.wss.on('listening', () => {
-          console.log(`[StreamServer] Listening on port ${this.port}`);
-
-          // Set up the screencast frame callback
-          setScreencastFrameCallback((frame) => {
-            this.broadcastFrame(frame);
-          });
-
-          resolve();
-        });
-      } catch (error) {
-        reject(error);
-      }
-    });
+      // Set up the screencast frame callback
+      setScreencastFrameCallback((frame) => {
+        this.broadcastFrame(frame);
+      });
+    } catch (error) {
+      console.error('[StreamServer] WebSocket error:', error);
+      throw error;
+    }
   }
 
   /**
@@ -144,75 +144,60 @@ export class StreamServer {
     // Clear the callback
     setScreencastFrameCallback(null);
 
-    // Close all clients
-    for (const client of this.clients) {
-      client.close();
-    }
-    this.clients.clear();
-
     // Close the server
-    if (this.wss) {
-      return new Promise((resolve) => {
-        this.wss!.close(() => {
-          this.wss = null;
-          resolve();
-        });
-      });
+    if (this.server) {
+      this.clientCount = 0;
+      await this.server.stop(true).finally(() => (this.server = null));
     }
   }
 
   /**
    * Handle a new WebSocket connection
    */
-  private handleConnection(ws: WebSocket): void {
+  private handleOpen(ws: ServerWebSocket): void {
     console.log('[StreamServer] Client connected');
-    this.clients.add(ws);
+    this.clientCount++;
+
+    // Subscribe the client to the screencast topic
+    ws.subscribe('screencast');
+    ws.subscribe('status');
 
     // Send initial status
     this.sendStatus(ws);
 
     // Start screencasting if this is the first client
-    if (this.clients.size === 1 && !this.isScreencasting) {
+    if (this.clientCount === 1 && !this.isScreencasting) {
       this.startScreencast().catch((error) => {
         console.error('[StreamServer] Failed to start screencast:', error);
         this.sendError(ws, error.message);
       });
     }
+  }
 
-    // Handle messages from client
-    ws.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString()) as StreamMessage;
-        this.handleMessage(message, ws);
-      } catch (error) {
-        console.error('[StreamServer] Failed to parse message:', error);
-      }
-    });
+  /**
+   * Handle client disconnection
+   */
+  private handleClose(ws: ServerWebSocket) {
+    console.log('[StreamServer] Client disconnected');
 
-    // Handle client disconnect
-    ws.on('close', () => {
-      console.log('[StreamServer] Client disconnected');
-      this.clients.delete(ws);
+    ws.unsubscribe('screencast');
+    ws.unsubscribe('status');
+    this.clientCount--;
 
-      // Stop screencasting if no more clients
-      if (this.clients.size === 0 && this.isScreencasting) {
-        this.stopScreencast().catch((error) => {
-          console.error('[StreamServer] Failed to stop screencast:', error);
-        });
-      }
-    });
-
-    ws.on('error', (error) => {
-      console.error('[StreamServer] Client error:', error);
-      this.clients.delete(ws);
-    });
+    // Stop screencasting if no more clients
+    if (this.clientCount === 0 && this.isScreencasting) {
+      this.stopScreencast().catch((error) => {
+        console.error('[StreamServer] Failed to stop screencast:', error);
+      });
+    }
   }
 
   /**
    * Handle incoming messages from clients
    */
-  private async handleMessage(message: StreamMessage, ws: WebSocket): Promise<void> {
+  private async handleMessage(ws: ServerWebSocket, data: string | Buffer): Promise<void> {
     try {
+      const message = JSON.parse(data.toString()) as StreamMessage;
       switch (message.type) {
         case 'input_mouse':
           await this.browser.injectMouseEvent({
@@ -251,6 +236,7 @@ export class StreamServer {
           break;
       }
     } catch (error) {
+      console.error('[StreamServer] Failed to parse message:', error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.sendError(ws, errorMessage);
     }
@@ -260,62 +246,60 @@ export class StreamServer {
    * Broadcast a frame to all connected clients
    */
   private broadcastFrame(frame: ScreencastFrame): void {
+    if (!this.server) return;
+
     const message: FrameMessage = {
       type: 'frame',
       data: frame.data,
       metadata: frame.metadata,
     };
 
-    const payload = JSON.stringify(message);
+    this.server.publish('screencast', JSON.stringify(message));
+  }
 
-    for (const client of this.clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(payload);
-      }
-    }
+  /**
+   * Broadcast status to all connected clients
+   */
+  private broadcastStatus(): void {
+    if (!this.server) return;
+    const message = this.statusMessage();
+    if (message !== null) this.server.publish('status', JSON.stringify(message));
   }
 
   /**
    * Send status to a client
    */
-  private sendStatus(ws: WebSocket): void {
-    let viewportWidth: number | undefined;
-    let viewportHeight: number | undefined;
+  private sendStatus(ws: ServerWebSocket): void {
+    const message = this.statusMessage();
+    if (message !== null) ws.send(JSON.stringify(message));
+  }
 
+  private statusMessage(): StatusMessage | null {
     try {
       const page = this.browser.getPage();
       const viewport = page.viewportSize();
-      viewportWidth = viewport?.width;
-      viewportHeight = viewport?.height;
+      const viewportWidth = viewport?.width;
+      const viewportHeight = viewport?.height;
+
+      const message: StatusMessage = {
+        type: 'status',
+        connected: true,
+        screencasting: this.isScreencasting,
+        viewportWidth,
+        viewportHeight,
+      };
+      return message;
     } catch {
       // Browser not launched yet
-    }
-
-    const message: StatusMessage = {
-      type: 'status',
-      connected: true,
-      screencasting: this.isScreencasting,
-      viewportWidth,
-      viewportHeight,
-    };
-
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(message));
+      return null;
     }
   }
 
   /**
    * Send an error to a client
    */
-  private sendError(ws: WebSocket, errorMessage: string): void {
-    const message: ErrorMessage = {
-      type: 'error',
-      message: errorMessage,
-    };
-
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(message));
-    }
+  private sendError(ws: ServerWebSocket, errorMessage: string): void {
+    ws.send(JSON.stringify({ type: 'error', message: errorMessage }));
   }
 
   /**
@@ -340,10 +324,7 @@ export class StreamServer {
         everyNthFrame: 1,
       });
 
-      // Notify all clients
-      for (const client of this.clients) {
-        this.sendStatus(client);
-      }
+      this.broadcastStatus();
     } catch (error) {
       // Reset flag on failure so caller can retry
       this.isScreencasting = false;
@@ -360,10 +341,7 @@ export class StreamServer {
     await this.browser.stopScreencast();
     this.isScreencasting = false;
 
-    // Notify all clients
-    for (const client of this.clients) {
-      this.sendStatus(client);
-    }
+    this.broadcastStatus();
   }
 
   /**
@@ -371,12 +349,5 @@ export class StreamServer {
    */
   getPort(): number {
     return this.port;
-  }
-
-  /**
-   * Get the number of connected clients
-   */
-  getClientCount(): number {
-    return this.clients.size;
   }
 }
