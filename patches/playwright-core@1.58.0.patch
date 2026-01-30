@@ -1,0 +1,95 @@
+diff --git a/lib/server/browserType.js b/lib/server/browserType.js
+index 84384f7fba3ec299db408da375e115417dbfaced..4507ebb4d9b25440fdc1e178913c0107411af932 100644
+--- a/lib/server/browserType.js
++++ b/lib/server/browserType.js
+@@ -194,6 +194,7 @@ class BrowserType extends import_instrumentation.SdkObject {
+     } = options;
+     const env = options.env ? (0, import_processLauncher.envArrayToObject)(options.env) : process.env;
+     const prepared = await progress.race(this._prepareToLaunch(options, isPersistent, userDataDir));
++    const isBunWindows = !!process.versions.bun && process.platform === "win32";
+     let transport = void 0;
+     let browserProcess = void 0;
+     const exitPromise = new import_manualPromise.ManualPromise();
+@@ -208,7 +209,7 @@ class BrowserType extends import_instrumentation.SdkObject {
+         progress.log(message);
+         browserLogsCollector.log(message);
+       },
+-      stdio: "pipe",
++      stdio: options.cdpPort !== void 0 || !this.supportsPipeTransport() || isBunWindows ? "ignore" : "pipe",
+       tempDirectories: prepared.tempDirectories,
+       attemptToGracefullyClose: async () => {
+         if (options.__testHookGracefullyClose)
+@@ -257,7 +258,7 @@ class BrowserType extends import_instrumentation.SdkObject {
+ Browser logs:
+ ${updatedLog}`);
+       }
+-      if (options.cdpPort !== void 0 || !this.supportsPipeTransport()) {
++      if (options.cdpPort !== void 0 || !this.supportsPipeTransport() || isBunWindows) {
+         transport = await import_transport.WebSocketTransport.connect(progress, wsEndpoint);
+       } else {
+         const stdio = launchedProcess.stdio;
+diff --git a/lib/server/chromium/chromium.js b/lib/server/chromium/chromium.js
+index 252afec1d5503e4b966a0afc95690646922fd750..91de75083839a81a4b4c6e4fca66610bc28e1f5f 100644
+--- a/lib/server/chromium/chromium.js
++++ b/lib/server/chromium/chromium.js
+@@ -257,8 +257,11 @@ class Chromium extends import_browserType.BrowserType {
+   async defaultArgs(options, isPersistent, userDataDir) {
+     const chromeArguments = this._innerDefaultArgs(options);
+     chromeArguments.push(`--user-data-dir=${userDataDir}`);
++    const isBunWindows = !!process.versions.bun && process.platform === "win32";
+     if (options.cdpPort !== void 0)
+       chromeArguments.push(`--remote-debugging-port=${options.cdpPort}`);
++    else if (isBunWindows)
++      chromeArguments.push("--remote-debugging-port=0");
+     else
+       chromeArguments.push("--remote-debugging-pipe");
+     if (isPersistent)
+@@ -323,7 +326,8 @@ class Chromium extends import_browserType.BrowserType {
+   }
+ }
+ async function waitForReadyState(options, browserLogsCollector) {
+-  if (options.cdpPort === void 0 && !options.args?.some((a) => a.startsWith("--remote-debugging-port")))
++  const isBunWindows = !!process.versions.bun && process.platform === "win32";
++  if (options.cdpPort === void 0 && !options.args?.some((a) => a.startsWith("--remote-debugging-port")) && !isBunWindows)
+     return {};
+   const result = new import_manualPromise.ManualPromise();
+   browserLogsCollector.onMessage((message) => {
+diff --git a/lib/server/transport.js b/lib/server/transport.js
+index 2502a8e4270f2607e9e2704001fcab506ac6ed6a..7a84225fd64d1f79e932c3a76374ca5537d7aa2a 100644
+--- a/lib/server/transport.js
++++ b/lib/server/transport.js
+@@ -40,15 +40,21 @@ class WebSocketTransport {
+     this.headers = [];
+     this.wsEndpoint = url;
+     this._logUrl = logUrl;
+-    this._ws = new import_utilsBundle.ws(url, [], {
++    if (!!process.versions.bun) {
++      this._ws = new WebSocket(url);
++      this._ws.on = (name, handler) => name !== "unexpected-response" && this._ws.addEventListener(name, handler);
++      this._ws.once = (name, handler) => this._ws.addEventListener(name, handler, { once: true });
++    } else {
++      this._ws = new import_utilsBundle.ws(url, [], {
+       maxPayload: 256 * 1024 * 1024,
+       // 256Mb,
+       headers: options.headers,
+       followRedirects: options.followRedirects,
+       agent: /^(https|wss):\/\//.test(url) ? import_happyEyeballs.httpsHappyEyeballsAgent : import_happyEyeballs.httpHappyEyeballsAgent,
+-      perMessageDeflate
+-    });
+-    this._ws.on("upgrade", (response) => {
++        perMessageDeflate
++      });
++    }
++    this._ws.on?.("upgrade", (response) => {
+       for (let i = 0; i < response.rawHeaders.length; i += 2) {
+         this.headers.push({ name: response.rawHeaders[i], value: response.rawHeaders[i + 1] });
+         if (options.debugLogHeader && response.rawHeaders[i] === options.debugLogHeader)
+@@ -157,7 +163,7 @@ ${Buffer.concat(chunks)}` : errorPrefix;
+     this._ws.close();
+   }
+   async closeAndWait() {
+-    if (this._ws.readyState === import_utilsBundle.ws.CLOSED)
++    if (this._ws.readyState === (import_utilsBundle.ws.CLOSED || 3))
+       return;
+     const promise = new Promise((f) => this._ws.once("close", f));
+     this.close();
