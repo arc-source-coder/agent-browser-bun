@@ -1,25 +1,16 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 /**
  * Cross-platform CLI wrapper for agent-browser
- *
  * This wrapper enables npx support on Windows where shell scripts don't work.
- * For global installs, postinstall.js patches the shims to invoke the native
- * binary directly (zero overhead).
  */
 
-import { spawn } from 'child_process';
-import { existsSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
-import { platform, arch } from 'os';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { join } from 'path';
 
 // Map Node.js platform/arch to binary naming convention
 function getBinaryName() {
-  const os = platform();
-  const cpuArch = arch();
+  const os = process.platform;
+  const cpuArch = process.arch;
 
   let osKey;
   switch (os) {
@@ -39,11 +30,9 @@ function getBinaryName() {
   let archKey;
   switch (cpuArch) {
     case 'x64':
-    case 'x86_64':
       archKey = 'x64';
       break;
     case 'arm64':
-    case 'aarch64':
       archKey = 'arm64';
       break;
     default:
@@ -54,18 +43,20 @@ function getBinaryName() {
   return `agent-browser-${osKey}-${archKey}${ext}`;
 }
 
-function main() {
+async function main() {
   const binaryName = getBinaryName();
+  const platform = process.platform;
+  const arch = process.arch;
 
   if (!binaryName) {
-    console.error(`Error: Unsupported platform: ${platform()}-${arch()}`);
+    console.error(`Error: Unsupported platform: ${platform}-${arch}`);
     process.exit(1);
   }
 
-  const binaryPath = join(__dirname, binaryName);
+  const binaryPath = join(import.meta.dir, binaryName);
 
-  if (!existsSync(binaryPath)) {
-    console.error(`Error: No binary found for ${platform()}-${arch()}`);
+  if (!(await Bun.file(binaryPath).exists())) {
+    console.error(`Error: No binary found for ${platform}-${arch}`);
     console.error(`Expected: ${binaryPath}`);
     console.error('');
     console.error('Run "bun build:native" to build for your platform,');
@@ -73,20 +64,19 @@ function main() {
     process.exit(1);
   }
 
-  // Spawn the native binary with inherited stdio
-  const child = spawn(binaryPath, process.argv.slice(2), {
-    stdio: 'inherit',
-    windowsHide: false,
-  });
+  try {
+    // Spawn the native binary with inherited stdio
+    const child = Bun.spawn([binaryPath, ...process.argv.slice(2)], {
+      stdio: ['inherit', 'inherit', 'inherit'],
+      windowsHide: false,
+    });
 
-  child.on('error', (err) => {
+    const exitCode = await child.exited;
+    process.exit(exitCode ?? 0);
+  } catch (err) {
     console.error(`Error executing binary: ${err.message}`);
     process.exit(1);
-  });
-
-  child.on('close', (code) => {
-    process.exit(code ?? 0);
-  });
+  }
 }
 
 main();
