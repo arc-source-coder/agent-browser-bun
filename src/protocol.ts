@@ -33,7 +33,7 @@ const launchSchema = baseCommandSchema.extend({
     .optional(),
   executablePath: z.string().optional(),
   extensions: z.array(z.string()).optional(),
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string().optional()).optional(),
   proxy: z
     .object({
       server: z.string().min(1),
@@ -54,7 +54,7 @@ const navigateSchema = baseCommandSchema.extend({
   action: z.literal('navigate'),
   url: z.string().min(1),
   waitUntil: z.enum(['load', 'domcontentloaded', 'networkidle']).optional(),
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string().optional()).optional(),
 });
 
 const clickSchema = baseCommandSchema.extend({
@@ -217,7 +217,7 @@ const routeSchema = baseCommandSchema.extend({
       status: z.number().optional(),
       body: z.string().optional(),
       contentType: z.string().optional(),
-      headers: z.record(z.string()).optional(),
+      headers: z.record(z.string(), z.string().optional()).optional(),
     })
     .optional(),
   abort: z.boolean().optional(),
@@ -459,7 +459,7 @@ const dispatchSchema = baseCommandSchema.extend({
   action: z.literal('dispatch'),
   selector: z.string().min(1),
   event: z.string().min(1),
-  eventInit: z.record(z.unknown()).optional(),
+  eventInit: z.record(z.string(), z.unknown()).optional(),
 });
 
 const evalHandleSchema = baseCommandSchema.extend({
@@ -499,7 +499,7 @@ const offlineSchema = baseCommandSchema.extend({
 
 const headersSchema = baseCommandSchema.extend({
   action: z.literal('headers'),
-  headers: z.record(z.string()),
+  headers: z.record(z.string(), z.string().optional()),
 });
 
 const pauseSchema = baseCommandSchema.extend({
@@ -935,7 +935,7 @@ export function parseCommand(input: string): ParseResult {
   const result = commandSchema.safeParse(json);
 
   if (!result.success) {
-    const errors = result.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join(', ');
+    const errors = result.error.issues.map((e) => `${e.path.join('.')}: ${e.message}`).join(', ');
     return { success: false, error: `Validation error: ${errors}`, id };
   }
 
