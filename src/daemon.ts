@@ -1,7 +1,6 @@
-import * as net from 'net';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
 import { BrowserManager } from './browser.js';
 import { parseCommand, serializeResponse, errorResponse } from './protocol.js';
 import { executeCommand } from './actions.js';
@@ -16,8 +15,13 @@ let currentSession = process.env.AGENT_BROWSER_SESSION || 'default';
 // Stream server for browser preview
 let streamServer: StreamServer | null = null;
 
+// Track cleanup in progress to prevent concurrent cleanup calls
+const cleaningUp = new Set<string>();
+
 // Default stream port (can be overridden with AGENT_BROWSER_STREAM_PORT)
 const DEFAULT_STREAM_PORT = 9223;
+
+const MAX_BUFFER_SIZE = 1024 * 1024 * 4; // 4MB
 
 /**
  * Set the current session
@@ -54,17 +58,17 @@ function getPortForSession(session: string): number {
 export function getAppDir(): string {
   // 1. XDG_RUNTIME_DIR (Linux standard)
   if (process.env.XDG_RUNTIME_DIR) {
-    return path.join(process.env.XDG_RUNTIME_DIR, 'agent-browser');
+    return join(process.env.XDG_RUNTIME_DIR, 'agent-browser');
   }
 
   // 2. Home directory fallback (like Docker Desktop's ~/.docker/run/)
-  const homeDir = os.homedir();
+  const homeDir = homedir();
   if (homeDir) {
-    return path.join(homeDir, '.agent-browser');
+    return join(homeDir, '.agent-browser');
   }
 
   // 3. Last resort: temp dir
-  return path.join(os.tmpdir(), 'agent-browser');
+  return join(tmpdir(), 'agent-browser');
 }
 
 export function getSocketDir(): string {
@@ -76,14 +80,14 @@ export function getSocketDir(): string {
 }
 
 /**
- * Get the socket path for the current session (Unix) or port (Windows)
+ * Get the socket address for the current session (Unix) or port (Windows)
  */
-export function getSocketPath(session?: string): string {
+export function getSocketAddress(session?: string): string {
   const sess = session ?? currentSession;
   if (isWindows) {
     return String(getPortForSession(sess));
   }
-  return path.join(getSocketDir(), `${sess}.sock`);
+  return join(getSocketDir(), `${sess}.sock`);
 }
 
 /**
@@ -91,7 +95,7 @@ export function getSocketPath(session?: string): string {
  */
 export function getPortFile(session?: string): string {
   const sess = session ?? currentSession;
-  return path.join(getSocketDir(), `${sess}.port`);
+  return join(getSocketDir(), `${sess}.port`);
 }
 
 /**
@@ -99,24 +103,24 @@ export function getPortFile(session?: string): string {
  */
 export function getPidFile(session?: string): string {
   const sess = session ?? currentSession;
-  return path.join(getSocketDir(), `${sess}.pid`);
+  return join(getSocketDir(), `${sess}.pid`);
 }
 
 /**
  * Check if daemon is running for the current session
  */
-export function isDaemonRunning(session?: string): boolean {
-  const pidFile = getPidFile(session);
-  if (!fs.existsSync(pidFile)) return false;
+export async function isDaemonRunning(session?: string): Promise<boolean> {
+  const pidFile = Bun.file(getPidFile(session));
+  if (!(await pidFile.exists())) return false;
 
   try {
-    const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+    const pid = parseInt((await pidFile.text()).trim(), 10);
     // Check if process exists (works on both Unix and Windows)
     process.kill(pid, 0);
     return true;
   } catch {
     // Process doesn't exist, clean up stale files
-    cleanupSocket(session);
+    await cleanupSocket(session);
     return false;
   }
 }
@@ -132,27 +136,35 @@ export function getConnectionInfo(
   if (isWindows) {
     return { type: 'tcp', port: getPortForSession(sess) };
   }
-  return { type: 'unix', path: path.join(getSocketDir(), `${sess}.sock`) };
+  return { type: 'unix', path: join(getSocketDir(), `${sess}.sock`) };
 }
 
 /**
  * Clean up socket and PID file for the current session
  */
-export function cleanupSocket(session?: string): void {
-  const pidFile = getPidFile(session);
-  const streamPortFile = getStreamPortFile(session);
+export async function cleanupSocket(session?: string): Promise<void> {
+  const sess = session ?? currentSession;
+
+  // Prevent concurrent cleanup for same session
+  if (cleaningUp.has(sess)) return;
+  cleaningUp.add(sess);
+
   try {
-    if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
-    if (fs.existsSync(streamPortFile)) fs.unlinkSync(streamPortFile);
+    const pidFile = Bun.file(getPidFile(session));
+    const streamPortFile = Bun.file(getStreamPortFile(session));
+    if (await pidFile.exists()) await pidFile.delete();
+    if (await streamPortFile.exists()) await streamPortFile.delete();
     if (isWindows) {
-      const portFile = getPortFile(session);
-      if (fs.existsSync(portFile)) fs.unlinkSync(portFile);
+      const portFile = Bun.file(getPortFile(session));
+      if (await portFile.exists()) await portFile.delete();
     } else {
-      const socketPath = getSocketPath(session);
-      if (fs.existsSync(socketPath)) fs.unlinkSync(socketPath);
+      const socketFile = Bun.file(getSocketAddress(session));
+      if (await socketFile.exists()) await socketFile.delete();
     }
   } catch {
     // Ignore cleanup errors
+  } finally {
+    cleaningUp.delete(sess);
   }
 }
 
@@ -161,8 +173,13 @@ export function cleanupSocket(session?: string): void {
  */
 export function getStreamPortFile(session?: string): string {
   const sess = session ?? currentSession;
-  return path.join(getSocketDir(), `${sess}.stream`);
+  return join(getSocketDir(), `${sess}.stream`);
 }
+
+type SocketData = {
+  chunks: string[];
+  httpChecked: boolean;
+};
 
 /**
  * Start the daemon server
@@ -171,12 +188,10 @@ export function getStreamPortFile(session?: string): string {
 export async function startDaemon(options?: { streamPort?: number }): Promise<void> {
   // Ensure socket directory exists
   const socketDir = getSocketDir();
-  if (!fs.existsSync(socketDir)) {
-    fs.mkdirSync(socketDir, { recursive: true });
-  }
+  mkdirSync(socketDir, { recursive: true });
 
   // Clean up any stale socket
-  cleanupSocket();
+  await cleanupSocket();
 
   const browser = new BrowserManager();
   let shuttingDown = false;
@@ -194,204 +209,220 @@ export async function startDaemon(options?: { streamPort?: number }): Promise<vo
 
     // Write stream port to file for clients to discover
     const streamPortFile = getStreamPortFile();
-    fs.writeFileSync(streamPortFile, streamPort.toString());
+    await Bun.write(streamPortFile, streamPort.toString());
   }
-
-  const server = net.createServer((socket) => {
-    let buffer = '';
-    let httpChecked = false;
-
-    socket.on('data', async (data) => {
-      buffer += data.toString();
-
-      // Security: Detect and reject HTTP requests to prevent cross-origin attacks.
-      // Browsers using fetch() must send HTTP headers (e.g., "POST / HTTP/1.1"),
-      // while legitimate clients send raw JSON starting with "{".
-      if (!httpChecked) {
-        httpChecked = true;
-        const trimmed = buffer.trimStart();
-        if (/^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE)\s/i.test(trimmed)) {
-          socket.destroy();
-          return;
-        }
-      }
-
-      // Process complete lines
-      while (buffer.includes('\n')) {
-        const newlineIdx = buffer.indexOf('\n');
-        const line = buffer.substring(0, newlineIdx);
-        buffer = buffer.substring(newlineIdx + 1);
-
-        if (!line.trim()) continue;
-
-        try {
-          const parseResult = parseCommand(line);
-
-          if (!parseResult.success) {
-            const resp = errorResponse(parseResult.id ?? 'unknown', parseResult.error);
-            socket.write(serializeResponse(resp) + '\n');
-            continue;
-          }
-
-          // Auto-launch browser if not already launched and this isn't a launch command
-          if (
-            !browser.isLaunched() &&
-            parseResult.command.action !== 'launch' &&
-            parseResult.command.action !== 'close'
-          ) {
-            const extensions = process.env.AGENT_BROWSER_EXTENSIONS
-              ? process.env.AGENT_BROWSER_EXTENSIONS.split(',')
-                  .map((p) => p.trim())
-                  .filter(Boolean)
-              : undefined;
-
-            // Parse args from env (comma or newline separated)
-            const argsEnv = process.env.AGENT_BROWSER_ARGS;
-            const args = argsEnv
-              ? argsEnv
-                  .split(/[,\n]/)
-                  .map((a) => a.trim())
-                  .filter((a) => a.length > 0)
-              : undefined;
-
-            // Parse proxy from env
-            const proxyServer = process.env.AGENT_BROWSER_PROXY;
-            const proxyBypass = process.env.AGENT_BROWSER_PROXY_BYPASS;
-            const proxy = proxyServer
-              ? {
-                  server: proxyServer,
-                  ...(proxyBypass && { bypass: proxyBypass }),
-                }
-              : undefined;
-
-            const ignoreHTTPSErrors = process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS === '1';
-            await browser.launch({
-              id: 'auto',
-              action: 'launch' as const,
-              headless: process.env.AGENT_BROWSER_HEADED !== '1',
-              executablePath: process.env.AGENT_BROWSER_EXECUTABLE_PATH,
-              extensions: extensions,
-              profile: process.env.AGENT_BROWSER_PROFILE,
-              storageState: process.env.AGENT_BROWSER_STATE,
-              args,
-              userAgent: process.env.AGENT_BROWSER_USER_AGENT,
-              proxy,
-              ignoreHTTPSErrors: ignoreHTTPSErrors,
-            });
-          }
-
-          // Handle close command specially
-          if (parseResult.command.action === 'close') {
-            const response = await executeCommand(parseResult.command, browser);
-            socket.write(serializeResponse(response) + '\n');
-
-            if (!shuttingDown) {
-              shuttingDown = true;
-              setTimeout(() => {
-                server.close();
-                cleanupSocket();
-                process.exit(0);
-              }, 100);
-            }
-            return;
-          }
-
-          const response = await executeCommand(parseResult.command, browser);
-          socket.write(serializeResponse(response) + '\n');
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          socket.write(serializeResponse(errorResponse('error', message)) + '\n');
-        }
-      }
-    });
-
-    socket.on('error', () => {
-      // Client disconnected, ignore
-    });
-  });
 
   const pidFile = getPidFile();
 
   // Write PID file before listening
-  fs.writeFileSync(pidFile, process.pid.toString());
+  await Bun.write(pidFile, process.pid.toString());
+
+  const listenOptions: any = isWindows
+    ? { hostname: '127.0.0.1', port: getPortForSession(currentSession) }
+    : { unix: getSocketAddress() };
 
   if (isWindows) {
-    // Windows: use TCP socket on localhost
-    const port = getPortForSession(currentSession);
-    const portFile = getPortFile();
-    fs.writeFileSync(portFile, port.toString());
-    server.listen(port, '127.0.0.1', () => {
-      // Daemon is ready on TCP port
-    });
-  } else {
-    // Unix: use Unix domain socket
-    const socketPath = getSocketPath();
-    server.listen(socketPath, () => {
-      // Daemon is ready
-    });
+    await Bun.write(getPortFile(), listenOptions.port.toString());
   }
 
-  server.on('error', (err) => {
-    console.error('Server error:', err);
-    cleanupSocket();
-    process.exit(1);
-  });
+  // Set Unix socket permissions to 0600
+  const oldUmask = isWindows ? null : process.umask(0o077);
 
-  // Handle shutdown signals
-  const shutdown = async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+  try {
+    const server = Bun.listen<SocketData>({
+      ...listenOptions,
+      socket: {
+        open(socket) {
+          socket.data = { chunks: [], httpChecked: false };
+        },
+        async data(socket, data) {
+          let socketData = socket.data;
+          const chunk = data.toString();
 
-    // Stop stream server if running
-    if (streamServer) {
-      await streamServer.stop();
-      streamServer = null;
-      // Clean up stream port file
-      const streamPortFile = getStreamPortFile();
-      try {
-        if (fs.existsSync(streamPortFile)) fs.unlinkSync(streamPortFile);
-      } catch {
-        // Ignore cleanup errors
+          // Prevent unbounded buffer growth
+          const currentSize = socketData.chunks.reduce((sum, c) => sum + c.length, 0);
+          if (currentSize + chunk.length > MAX_BUFFER_SIZE) {
+            socket.terminate();
+            return;
+          }
+
+          socketData.chunks.push(chunk);
+
+          // Process complete lines
+          let buffer = socketData.chunks.join('');
+
+          // Security: Detect and reject HTTP requests to prevent cross-origin attacks.
+          // Browsers using fetch() must send HTTP headers (e.g., "POST / HTTP/1.1"),
+          // while legitimate clients send raw JSON starting with "{".
+          if (!socketData.httpChecked) {
+            socketData.httpChecked = true;
+            // Check buffer for HTTP method signatures
+            const trimmed = buffer.trimStart();
+            if (/^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE)\s/i.test(trimmed)) {
+              socket.terminate();
+              return;
+            }
+          }
+
+          while (buffer.includes('\n')) {
+            const newlineIdx = buffer.indexOf('\n');
+            const line = buffer.substring(0, newlineIdx);
+            buffer = buffer.substring(newlineIdx + 1);
+
+            if (!line.trim()) continue;
+
+            try {
+              const parseResult = parseCommand(line);
+
+              if (!parseResult.success) {
+                const resp = errorResponse(parseResult.id ?? 'unknown', parseResult.error);
+                socket.write(serializeResponse(resp) + '\n');
+                continue;
+              }
+
+              // Auto-launch browser if not already launched and this isn't a launch command
+              if (
+                !browser.isLaunched() &&
+                parseResult.command.action !== 'launch' &&
+                parseResult.command.action !== 'close'
+              ) {
+                const extensions = process.env.AGENT_BROWSER_EXTENSIONS
+                  ? process.env.AGENT_BROWSER_EXTENSIONS.split(',')
+                      .map((p) => p.trim())
+                      .filter(Boolean)
+                  : undefined;
+
+                // Parse args from env (comma or newline separated)
+                const argsEnv = process.env.AGENT_BROWSER_ARGS;
+                const args = argsEnv
+                  ? argsEnv
+                      .split(/[,\n]/)
+                      .map((a) => a.trim())
+                      .filter((a) => a.length > 0)
+                  : undefined;
+
+                // Parse proxy from env
+                const proxyServer = process.env.AGENT_BROWSER_PROXY;
+                const proxyBypass = process.env.AGENT_BROWSER_PROXY_BYPASS;
+                const proxy = proxyServer
+                  ? {
+                      server: proxyServer,
+                      ...(proxyBypass && { bypass: proxyBypass }),
+                    }
+                  : undefined;
+
+                const ignoreHTTPSErrors = process.env.AGENT_BROWSER_IGNORE_HTTPS_ERRORS === '1';
+                await browser.launch({
+                  id: 'auto',
+                  action: 'launch' as const,
+                  headless: process.env.AGENT_BROWSER_HEADED !== '1',
+                  executablePath: process.env.AGENT_BROWSER_EXECUTABLE_PATH,
+                  extensions: extensions,
+                  profile: process.env.AGENT_BROWSER_PROFILE,
+                  storageState: process.env.AGENT_BROWSER_STATE,
+                  args,
+                  userAgent: process.env.AGENT_BROWSER_USER_AGENT,
+                  proxy,
+                  ignoreHTTPSErrors: ignoreHTTPSErrors,
+                });
+              }
+
+              // Handle close command specially
+              if (parseResult.command.action === 'close') {
+                const response = await executeCommand(parseResult.command, browser);
+                socket.write(serializeResponse(response) + '\n');
+
+                if (!shuttingDown) {
+                  shuttingDown = true;
+                  setTimeout(async () => {
+                    server.stop(true);
+                    await cleanupSocket().finally(() => process.exit(0));
+                  }, 100);
+                }
+                return;
+              }
+
+              const response = await executeCommand(parseResult.command, browser);
+              socket.write(serializeResponse(response) + '\n');
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              socket.write(serializeResponse(errorResponse('error', message)) + '\n');
+            }
+          }
+          // Save remaining partial line back to chunks
+          socketData.chunks = buffer ? [buffer] : [];
+        },
+        drain() {
+          // ignore
+        },
+        close() {
+          // Ignore
+        },
+        error() {
+          // Client disconnected, ignore
+        },
+      },
+    });
+
+    // Handle shutdown signals
+    const shutdown = async () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+
+      // Stop stream server if running
+      if (streamServer) {
+        await streamServer.stop();
+        streamServer = null;
+        // Clean up stream port file
+        const streamPortFile = Bun.file(getStreamPortFile());
+        try {
+          if (await streamPortFile.exists()) await streamPortFile.delete();
+        } catch {
+          // Ignore cleanup errors
+        }
       }
+
+      await browser.close();
+      server.stop(true);
+      await cleanupSocket().finally(() => process.exit(0));
+    };
+
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+    process.on('SIGHUP', shutdown);
+
+    // Handle unexpected errors - always cleanup
+    process.on('uncaughtException', async (err) => {
+      console.error('Uncaught exception:', err);
+      await cleanupSocket().finally(() => process.exit(1));
+    });
+
+    process.on('unhandledRejection', async (reason) => {
+      console.error('Unhandled rejection:', reason);
+      await cleanupSocket().finally(() => process.exit(1));
+    });
+
+    // Cleanup on normal exit
+    process.on('beforeExit', async () => {
+      await cleanupSocket();
+    });
+
+    // Keep process alive
+    process.stdin.resume();
+  } catch (err) {
+    console.error('Server error:', err);
+    await cleanupSocket().finally(() => process.exit(1));
+  } finally {
+    if (oldUmask !== null) {
+      process.umask(oldUmask);
     }
-
-    await browser.close();
-    server.close();
-    cleanupSocket();
-    process.exit(0);
-  };
-
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
-  process.on('SIGHUP', shutdown);
-
-  // Handle unexpected errors - always cleanup
-  process.on('uncaughtException', (err) => {
-    console.error('Uncaught exception:', err);
-    cleanupSocket();
-    process.exit(1);
-  });
-
-  process.on('unhandledRejection', (reason) => {
-    console.error('Unhandled rejection:', reason);
-    cleanupSocket();
-    process.exit(1);
-  });
-
-  // Cleanup on normal exit
-  process.on('exit', () => {
-    cleanupSocket();
-  });
-
-  // Keep process alive
-  process.stdin.resume();
+  }
 }
 
 // Run daemon if this is the entry point
-if (process.argv[1]?.endsWith('daemon.js') || process.env.AGENT_BROWSER_DAEMON === '1') {
-  startDaemon().catch((err) => {
+if (import.meta.main || process.env.AGENT_BROWSER_DAEMON === '1') {
+  startDaemon().catch(async (err) => {
     console.error('Daemon error:', err);
-    cleanupSocket();
-    process.exit(1);
+    await cleanupSocket().finally(() => process.exit(1));
   });
 }

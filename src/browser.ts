@@ -14,9 +14,9 @@ import {
   type CDPSession,
   type Video,
 } from 'playwright-core';
-import path from 'node:path';
-import os from 'node:os';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir, homedir } from 'node:os';
+import { mkdirSync, rmSync } from 'node:fs';
 import type { LaunchCommand } from './types.js';
 import { type RefMap, type EnhancedSnapshot, getEnhancedSnapshot, parseRef } from './snapshot.js';
 
@@ -1087,7 +1087,7 @@ export class BrowserManager {
       const extArgs = [`--disable-extensions-except=${extPaths}`, `--load-extension=${extPaths}`];
       const allArgs = options.args ? [...extArgs, ...options.args] : extArgs;
       context = await launcher.launchPersistentContext(
-        path.join(os.tmpdir(), `agent-browser-ext-${session}`),
+        join(tmpdir(), `agent-browser-ext-${session}`),
         {
           headless: false,
           executablePath: options.executablePath,
@@ -1103,7 +1103,7 @@ export class BrowserManager {
     } else if (hasProfile) {
       // Profile uses persistent context for durable cookies/storage
       // Expand ~ to home directory since it won't be shell-expanded
-      const profilePath = options.profile!.replace(/^~\//, os.homedir() + '/');
+      const profilePath = options.profile!.replace(/^~\//, homedir() + '/');
       context = await launcher.launchPersistentContext(profilePath, {
         headless: options.headless ?? true,
         executablePath: options.executablePath,
@@ -1602,7 +1602,7 @@ export class BrowserManager {
     }
 
     // Check if output file already exists
-    if (existsSync(outputPath)) {
+    if (await Bun.file(outputPath).exists()) {
       throw new Error(`Output file already exists: ${outputPath}`);
     }
 
@@ -1653,10 +1653,7 @@ export class BrowserManager {
 
     // Create a temp directory for video recording
     const session = process.env.AGENT_BROWSER_SESSION || 'default';
-    this.recordingTempDir = path.join(
-      os.tmpdir(),
-      `agent-browser-recording-${session}-${Date.now()}`
-    );
+    this.recordingTempDir = join(tmpdir(), `agent-browser-recording-${session}-${Date.now()}`);
     mkdirSync(this.recordingTempDir, { recursive: true });
 
     this.recordingOutputPath = outputPath;
