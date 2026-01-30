@@ -20,23 +20,23 @@ echo ""
 # Ensure output directory exists
 mkdir -p "$OUTPUT_DIR"
 
-# Build the Docker image if needed
+# Build the Docker / Podman image if needed
 echo -e "${YELLOW}Building Docker cross-compilation image...${NC}"
-docker build -t agent-browser-builder -f "$PROJECT_ROOT/docker/Dockerfile.build" "$PROJECT_ROOT"
+podman build -t agent-browser-builder -f "$PROJECT_ROOT/docker/Dockerfile.build" "$PROJECT_ROOT"
 
 # Function to build for a target
 build_target() {
     local target=$1
     local output_name=$2
-    
+
     echo -e "${YELLOW}Building for ${target}...${NC}"
-    
-    docker run --rm \
+
+    podman run --rm \
         -v "$PROJECT_ROOT/cli:/build" \
         -v "$OUTPUT_DIR:/output" \
         agent-browser-builder \
         -c "cargo zigbuild --release --target ${target} && cp /build/target/${target}/release/agent-browser* /output/${output_name} && chmod +x /output/${output_name} 2>/dev/null || true"
-    
+
     if [ -f "$OUTPUT_DIR/$output_name" ]; then
         echo -e "${GREEN}✓ Built ${output_name}${NC}"
     else
