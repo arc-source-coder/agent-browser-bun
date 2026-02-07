@@ -6,6 +6,7 @@
  */
 
 import { join } from 'path';
+import { accessSync, chmodSync, constants } from 'fs';
 
 // Map Node.js platform/arch to binary naming convention
 function getBinaryName() {
@@ -65,6 +66,23 @@ async function main() {
   }
 
   try {
+    // Ensure binary is executable (fixes EACCES on macOS/Linux when postinstall didn't run,
+    // e.g., when using bun which blocks lifecycle scripts by default)
+    if (process.platform !== 'win32') {
+      try {
+        accessSync(binaryPath, constants.X_OK);
+      } catch {
+        // Binary exists but isn't executable - fix it
+        try {
+          chmodSync(binaryPath, 0o755);
+        } catch (chmodErr) {
+          console.error(`Error: Cannot make binary executable: ${chmodErr.message}`);
+          console.error('Try running: chmod +x ' + binaryPath);
+          process.exit(1);
+        }
+      }
+    }
+
     // Spawn the native binary with inherited stdio
     const child = Bun.spawn([binaryPath, ...process.argv.slice(2)], {
       stdio: ['inherit', 'inherit', 'inherit'],
