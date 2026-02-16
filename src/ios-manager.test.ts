@@ -1,37 +1,35 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, mock, beforeEach } from 'bun:test';
 import { IOSManager } from './ios-manager.js';
 
 // Mock node-simctl
-vi.mock('node-simctl', () => {
-  return {
-    Simctl: class MockSimctl {
-      async getDevices() {
-        return {
-          'iOS 18.0': [
-            {
-              name: 'iPhone 16 Pro',
-              udid: 'TEST-UDID-1234',
-              state: 'Shutdown',
-              isAvailable: true,
-            },
-            {
-              name: 'iPhone 16',
-              udid: 'TEST-UDID-5678',
-              state: 'Booted',
-              isAvailable: true,
-            },
-            {
-              name: 'iPad Pro',
-              udid: 'TEST-UDID-IPAD',
-              state: 'Shutdown',
-              isAvailable: true,
-            },
-          ],
-        };
-      }
-    },
-  };
-});
+mock.module('node-simctl', () => ({
+  Simctl: class MockSimctl {
+    async getDevices() {
+      return {
+        'iOS 18.0': [
+          {
+            name: 'iPhone 16 Pro',
+            udid: 'TEST-UDID-1234',
+            state: 'Shutdown',
+            isAvailable: true,
+          },
+          {
+            name: 'iPhone 16',
+            udid: 'TEST-UDID-5678',
+            state: 'Booted',
+            isAvailable: true,
+          },
+          {
+            name: 'iPad Pro',
+            udid: 'TEST-UDID-IPAD',
+            state: 'Shutdown',
+            isAvailable: true,
+          },
+        ],
+      };
+    }
+  },
+}));
 
 describe('IOSManager', () => {
   let manager: IOSManager;
@@ -114,8 +112,6 @@ describe('IOSManager integration', () => {
     let manager: IOSManager;
 
     beforeEach(() => {
-      // Use real implementation for integration tests
-      vi.resetModules();
       manager = new IOSManager();
     });
 

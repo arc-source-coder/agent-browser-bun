@@ -11,9 +11,6 @@ declare const window: any;
 import { Simctl } from 'node-simctl';
 import { remote, type Browser as WDIOBrowser } from 'webdriverio';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
 
 // Ref map for element targeting (mirrors snapshot.ts)
 export interface IOSRefMap {
@@ -625,12 +622,7 @@ export class IOSManager {
     const base64 = await this.browser.takeScreenshot();
 
     if (options?.path) {
-      const { writeFileSync, mkdirSync } = await import('node:fs');
-      const dir = path.dirname(options.path);
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
-      writeFileSync(options.path, base64, 'base64');
+      await Bun.write(options.path, Buffer.from(base64, 'base64'));
       return { path: options.path };
     }
 

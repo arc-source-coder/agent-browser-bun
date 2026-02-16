@@ -7,9 +7,7 @@
  */
 import { describe, it, expect, afterAll } from 'bun:test';
 import { BrowserManager } from '../src/browser.js';
-import * as os from 'os';
-
-const isLinux = os.platform() === 'linux';
+const isLinux = process.platform === 'linux';
 
 // Only run if @sparticuz/chromium is available AND we're on Linux
 const canRunTest = await (async () => {

@@ -1,26 +1,25 @@
-import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll, afterAll } from 'bun:test';
 import { BrowserManager } from '../src/browser.js';
-import { writeFileSync, unlinkSync } from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 describe('File Access (Issue #345)', () => {
   let browser: BrowserManager;
-  const testFilePath = path.join(os.tmpdir(), 'agent-browser-test-file.html');
+  const testFilePath = join(tmpdir(), 'agent-browser-test-file.html');
   const testFileUrl = `file://${testFilePath}`;
 
   // Create test HTML file before tests
-  beforeAll(() => {
-    writeFileSync(
+  beforeAll(async () => {
+    await Bun.write(
       testFilePath,
       '<html><body><h1>Test File Access</h1><p>This content was loaded from a local file.</p></body></html>'
     );
   });
 
   // Clean up test file after tests
-  afterAll(() => {
+  afterAll(async () => {
     try {
-      unlinkSync(testFilePath);
+      await Bun.file(testFilePath).delete();
     } catch {
       // Ignore if file doesn't exist
     }
